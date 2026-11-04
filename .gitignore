@@ -1,0 +1,16 @@
+# data, features, model weights and secrets stay out of the repo
+workspace/
+data/
+features/
+*.wav
+*.mp3
+*.npy
+*.pt
+*.zip
+cookies.txt
+*.cookies
+__pycache__/
+*.pyc
+results/*
+!results/final/
+results/final/*.json

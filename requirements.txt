@@ -1,0 +1,9 @@
+numpy
+pandas
+librosa
+soundfile
+scikit-learn
+matplotlib
+tqdm
+yt-dlp[default]
+# torch / torchaudio: install separately with the CUDA build for your GPU, see README
