@@ -36,6 +36,21 @@ The results show four things.
 3. Removing the spectral envelope does not help every generator. It makes the CNN better on MusicLDM (AUC 0.69 to 0.90), but it hurts MusicGen and Stable Audio Open.
 4. How hard a generator is to detect seems to follow its architecture. AudioLDM 2 and Mustango decode through a mel-spectrogram VAE and HiFi-GAN, like two of the training generators, and every CNN still detects 0.78 to 0.99 of their clips when they are unseen. MusicLDM has the same design, but it fails because of its spectral envelope, and envelope removal helps with it. MusicGen (EnCodec tokens) and Stable Audio Open (waveform VAE) stay hard to detect for every CNN (detection 0.18 to 0.34). This is a hypothesis, since I have not tested it directly.
 
+## Compression control
+
+The real clips come from YouTube, which is lossy, while the AI clips are lossless. Because of this, I tested whether the detectors simply learned that compressed audio means real music. I checked 40 of the real clips in November 2026, and YouTube currently serves all of them as AAC-LC at about 129 kbps, 44.1 kHz stereo. I then passed the clips through the same codec (AAC at 128 kbps, 44.1 kHz stereo), decoded them back to 16 kHz mono, and ran the same leave-one-generator-out test with 3 seeds. In the last setting of the table, the real clips also go through this codec. The real clips were already AAC from YouTube, so they go through the codec twice, but both classes now carry the same encoder trace. I trained all models again for this test, so the numbers without compression are slightly different from the main table.
+
+| Detector | Setting | Seen generators: balanced acc. | Unseen generator: mean detection | Unseen generator: mean AUC |
+|---|---|---|---|---|
+| Baseline CNN | No compression | 0.971 ± 0.006 | 0.493 ± 0.054 | 0.875 ± 0.011 |
+| Baseline CNN | Only the test AI clips compressed | 0.892 ± 0.018 | 0.382 ± 0.072 | 0.830 ± 0.012 |
+| Baseline CNN | Real and AI clips through the same codec | 0.962 ± 0.013 | 0.529 ± 0.043 | 0.875 ± 0.031 |
+| Envelope-removed CNN | No compression | 0.937 ± 0.009 | 0.555 ± 0.018 | 0.883 ± 0.015 |
+| Envelope-removed CNN | Only the test AI clips compressed | 0.934 ± 0.009 | 0.538 ± 0.028 | 0.880 ± 0.015 |
+| Envelope-removed CNN | Real and AI clips through the same codec | 0.931 ± 0.015 | 0.570 ± 0.048 | 0.887 ± 0.014 |
+
+When the real and AI clips go through the same codec, the results on unseen generators stay almost the same (mean AUC 0.875 for the baseline CNN and 0.887 for the envelope-removed CNN). This shows that the gap between seen and unseen generators is not caused by the codec difference. However, the baseline CNN is sensitive when the compression of training and test data does not match. When only the test AI clips are compressed, its detection on unseen generators drops from 0.49 to 0.38. Besides, when a model trained on compressed clips is tested on real clips that were not compressed again, it keeps only 68% of them as real, compared with 95% before. The envelope-removed CNN changes by 0.02 or less in these tests. This suggests that the codec mostly changes the spectral envelope, but I have not tested this directly.
+
 ## Method in brief
 
 The input is a 128-band log-mel spectrogram (0–8 kHz, 1,024-sample window, 512-sample hop) for each 10-second clip, which is a 128 × 313 image. I subtracted each clip's overall mean (in dB), which removes loudness differences between generators.
@@ -72,6 +87,8 @@ python extract_features.py                                  # ~2 min on GPU
 python exp1_attribution.py
 python exp1b_robustness.py
 python final_runs.py                                        # ~45 min per seed, 3 seeds
+python codec_control.py                                     # optional: compression control, ~1.5-3 hours
+python codec_control_c.py                                   # optional: same codec for real clips, ~45 min
 ```
 
 A note on the real-audio download. YouTube rate-limits aggressive downloads, so the script uses one request stream with a delay, pauses automatically when it is blocked, and only marks a video as permanently missing when YouTube says it is private, removed or terminated. About half of the MusicCaps videos are no longer available.
@@ -204,9 +221,25 @@ python final_runs.py --seeds 0    # one seed, about 45 minutes
 
 Each seed is saved when it finishes, and rerunning skips finished seeds. Output in `results/final/`: `summary.md`, `summary.csv`, `overview.png`, `per_generator_auc.png`, and one JSON file per seed.
 
+### Compression control (`check_real_codec.py`, `codec_control.py`, `codec_control_c.py`)
+
+These scripts test whether the detectors rely on the codec difference between the real and AI clips. They need ffmpeg, save a checkpoint after every step, and skip finished parts when rerun.
+
+- `check_real_codec.py` asks YouTube which audio stream it serves for a random sample of the real clips, using the same format rule as the download script. It does not download anything.
+- `codec_control.py` passes every AI clip through a codec (AAC at 128 kbps, Opus at 128 kbps and AAC at 64 kbps) and back to 16 kHz mono, and keeps only the log-mel features. It trains the baseline and envelope-removed CNNs on the original clips and tests them on the compressed AI clips. It also trains a model with only the AI clips compressed, but this setting is confounded, since every AI clip then carries the same encoder trace and the real clips do not.
+- `codec_control_c.py` passes the real clips through the same AAC chain as well, and trains and tests with both classes compressed. The real clips were already AAC from YouTube, so they go through the codec twice, but both classes now carry the same encoder trace. This is the fair comparison in the Compression control table.
+
+```
+python check_real_codec.py --browser firefox   # a few minutes
+python codec_control.py                        # about 1.5 to 3 hours, mostly encoding
+python codec_control_c.py                      # about 45 minutes
+```
+
+Output: `results/codec/` (`summary.md`, `summary_c.md` and one JSON line per run) and the compressed features in `features_codec/`.
+
 ## Limitations
 
-This study has several limitations. Firstly, only 2,856 of the 5,521 real clips (52%) could still be downloaded, and the missing half is not random. The second limitation is that I used only 3 seeds, and several detection rates vary by 0.1 to 0.2 between seeds. Besides, the study covers five open-source generators and no commercial systems, and only two of the generators are outside the mel-spectrogram and HiFi-GAN group. All audio is 16 kHz, which removes the upper band of MusicGen (32 kHz) and Stable Audio Open (44.1 kHz). The real clips come from YouTube, which is lossy, while the AI clips are lossless, so part of what a detector learns may be the codec. Finally, the architecture explanation is a hypothesis, not a controlled test.
+This study has several limitations. Firstly, only 2,856 of the 5,521 real clips (52%) could still be downloaded, and the missing half is not random. The second limitation is that I used only 3 seeds, and several detection rates vary by 0.1 to 0.2 between seeds. Besides, the study covers five open-source generators and no commercial systems, and only two of the generators are outside the mel-spectrogram and HiFi-GAN group. All audio is 16 kHz, which removes the upper band of MusicGen (32 kHz) and Stable Audio Open (44.1 kHz). The real clips come from YouTube, which is lossy, while the AI clips are lossless. When I put both through the same codec, the main results did not change, but the baseline CNN is sensitive when the compression of training and test data does not match (see Compression control). Stronger compression (AAC at 64 kbps) also lowers detection a lot for both CNNs. Finally, the architecture explanation is a hypothesis, not a controlled test.
 
 ## Data and credits
 
